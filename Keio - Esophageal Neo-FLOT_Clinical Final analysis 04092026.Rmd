@@ -1,0 +1,515 @@
+---
+title: "Keio - Esophageal Neo-FLOT_Clinical Final analysis 04092026"
+output: html_notebook
+---
+
+library(swimplot)
+library(coxphf)
+library(grid)
+library(gtable)
+library(readr) 
+library(mosaic)
+library(dplyr) 
+library(survival) 
+library(survminer) 
+library(ggplot2)
+library(scales)
+library(coxphf)
+library(ggthemes)
+library(tidyverse)
+library(gtsummary)
+library(flextable)
+library(parameters)
+library(car)
+library(ComplexHeatmap)
+library(tidyverse)
+library(readxl)
+library(survival)
+library(janitor)
+library(openxlsx)
+library(writexl)
+library(rms)
+library(pROC)
+library(DT)
+
+#ctDNA Detection rate by Stage and Window
+```{r}
+#Baseline
+rm(list=ls())
+setwd("~/Downloads")
+circ_data <- read.csv("Keio Neo FLOT_Clinical Data.csv")
+circ_data$ctDNA.Base <- factor(circ_data$ctDNA.Base, levels=c("NEGATIVE","POSITIVE"))
+circ_data$Stage <- factor(circ_data$Stage, levels=c("I","II","III","IV"))
+circ_data <- subset(circ_data, ctDNA.Base %in% c("NEGATIVE", "POSITIVE"))
+positive_counts_by_stage <- aggregate(circ_data$ctDNA.Base == "POSITIVE", by=list(circ_data$Stage), FUN=sum)
+total_counts_by_stage <- aggregate(circ_data$ctDNA.Base, by=list(circ_data$Stage), FUN=length)
+combined_data <- data.frame(
+  Stage = total_counts_by_stage$Group.1,
+  Total_Count = total_counts_by_stage$x,
+  Positive_Count = positive_counts_by_stage$x,
+  Rate = (positive_counts_by_stage$x / total_counts_by_stage$x) * 100  # Convert to percentage
+)
+combined_data$Rate <- sprintf("%.2f%%", combined_data$Rate)
+overall_total_count <- nrow(circ_data)
+overall_positive_count <- nrow(circ_data[circ_data$ctDNA.Base == "POSITIVE",])
+overall_positivity_rate <- (overall_positive_count / overall_total_count) * 100  # Convert to percentage
+overall_row <- data.frame(
+  Stage = "Overall",
+  Total_Count = overall_total_count,
+  Positive_Count = overall_positive_count,
+  Rate = sprintf("%.2f%%", overall_positivity_rate)
+)
+combined_data <- rbind(combined_data, overall_row)
+print(combined_data)
+
+#post-NAC Window
+rm(list=ls())
+setwd("~/Downloads")
+circ_data <- read.csv("Keio Neo FLOT_Clinical Data.csv")
+circ_data$ctDNA.Base <- factor(circ_data$ctDNA.postNAC, levels=c("NEGATIVE","POSITIVE"))
+circ_data$Stage <- factor(circ_data$Stage, levels=c("I","II","III","IV"))
+circ_data <- subset(circ_data, ctDNA.postNAC %in% c("NEGATIVE", "POSITIVE"))
+positive_counts_by_stage <- aggregate(circ_data$ctDNA.postNAC == "POSITIVE", by=list(circ_data$Stage), FUN=sum)
+total_counts_by_stage <- aggregate(circ_data$ctDNA.postNAC, by=list(circ_data$Stage), FUN=length)
+combined_data <- data.frame(
+  Stage = total_counts_by_stage$Group.1,
+  Total_Count = total_counts_by_stage$x,
+  Positive_Count = positive_counts_by_stage$x,
+  Rate = (positive_counts_by_stage$x / total_counts_by_stage$x) * 100  # Convert to percentage
+)
+combined_data$Rate <- sprintf("%.2f%%", combined_data$Rate)
+overall_total_count <- nrow(circ_data)
+overall_positive_count <- nrow(circ_data[circ_data$ctDNA.postNAC == "POSITIVE",])
+overall_positivity_rate <- (overall_positive_count / overall_total_count) * 100  # Convert to percentage
+overall_row <- data.frame(
+  Stage = "Overall",
+  Total_Count = overall_total_count,
+  Positive_Count = overall_positive_count,
+  Rate = sprintf("%.2f%%", overall_positivity_rate)
+)
+combined_data <- rbind(combined_data, overall_row)
+print(combined_data)
+
+#MRD Window
+rm(list=ls())
+setwd("~/Downloads")
+circ_data <- read.csv("Keio Neo FLOT_Clinical Data.csv")
+circ_data$ctDNA.MRD <- factor(circ_data$ctDNA.MRD, levels=c("NEGATIVE","POSITIVE"))
+circ_data$Stage <- factor(circ_data$Stage, levels=c("I","II","III"))
+circ_data <- subset(circ_data, ctDNA.MRD %in% c("NEGATIVE", "POSITIVE"))
+positive_counts_by_stage <- aggregate(circ_data$ctDNA.MRD == "POSITIVE", by=list(circ_data$Stage), FUN=sum)
+total_counts_by_stage <- aggregate(circ_data$ctDNA.MRD, by=list(circ_data$Stage), FUN=length)
+combined_data <- data.frame(
+  Stage = total_counts_by_stage$Group.1,
+  Total_Count = total_counts_by_stage$x,
+  Positive_Count = positive_counts_by_stage$x,
+  Rate = (positive_counts_by_stage$x / total_counts_by_stage$x) * 100  # Convert to percentage
+)
+combined_data$Rate <- sprintf("%.2f%%", combined_data$Rate)
+overall_total_count <- nrow(circ_data)
+overall_positive_count <- nrow(circ_data[circ_data$ctDNA.MRD == "POSITIVE",])
+overall_positivity_rate <- (overall_positive_count / overall_total_count) * 100  # Convert to percentage
+overall_row <- data.frame(
+  Stage = "Overall",
+  Total_Count = overall_total_count,
+  Positive_Count = overall_positive_count,
+  Rate = sprintf("%.2f%%", overall_positivity_rate)
+)
+combined_data <- rbind(combined_data, overall_row)
+print(combined_data)
+```
+
+
+
+
+#Demographics Table
+```{r}
+rm(list=ls())
+setwd("~/Downloads")
+circ_data <- read.csv("Keio Neo FLOT_Clinical Data.csv")
+
+circ_data_subset <- circ_data %>%
+  select(
+    Age,
+    Sex,
+    ECOG,
+    Location,
+    Stage,
+    Resection,
+    pGrade,
+    Recurrence,
+    OS.Event,
+    OS.months) %>%
+  mutate(
+    Age = as.numeric(Age),
+    Sex = factor(Sex, levels = c("Male", "Female")),
+    ECOG = factor(ECOG, levels = c("0", "1")),
+    Location = factor(Location, levels = c("Lt", "Mt", "Ut")),
+    Stage = factor(Stage, levels = c("I","II","III","IV")),
+    Resection = factor(Resection, levels = c("R0","R1")),
+    pGrade = factor(pGrade, levels = c("Grade0","Grade1","Grade2","Grade3")),
+    Recurrence = factor(Recurrence, levels = c("TRUE","FALSE")),
+    OS.Event = factor(OS.Event, levels = c("TRUE","FALSE")),
+    OS.months = as.numeric(OS.months))
+table1 <- circ_data_subset %>%
+  tbl_summary(
+    statistic = list(
+      all_continuous() ~ "{median} ({min} - {max})",
+      all_categorical() ~ "{n} ({p}%)")) %>%
+  bold_labels()
+table1
+fit1 <- as_flex_table(
+  table1,
+  include = everything(),
+  return_calls = FALSE,
+  strip_md_bold = TRUE)
+fit1
+save_as_docx(fit1, path= "~/Downloads/1. Keio ESCC_Demographics Table.docx")
+```
+
+
+#Heatmap with Clinical & Genomics Factors
+```{r}
+rm(list=ls())
+setwd("~/Downloads")
+circ_data <- read.csv("Keio Neo FLOT_Clinical Data.csv")
+circ_data <- circ_data %>% arrange(Stage)
+circ_datadf <- as.data.frame(circ_data)
+
+ha <- HeatmapAnnotation(
+  Stage = circ_data$Stage,
+  Sex = circ_data$Sex,
+  Location = circ_data$Location,
+  Grade = circ_data$Grade,
+  ctDNA.Base = circ_data$ctDNA.Base,
+  ctDNA.postNAC = circ_data$ctDNA.postNAC,
+  ctDNA.MRD = circ_data$ctDNA.MRD,
+  ctDNA.surveillance = circ_data$ctDNA.surveillance,
+  EFS.Event = circ_data$EFS.Event,
+  OS.Event = circ_data$OS.Event,
+  
+  col = list(Stage = c("I" = "seagreen1", "II" = "seagreen", "III" = "orange", "IV" = "purple"),
+    Sex = c("Female" = "goldenrod" , "Male" = "blue4"),
+    Location = c("Lt" = "brown", "Mt" = "darkgreen", "Ut" = "orange4"),
+    Grade = c("Grade1b/2/3" = "cornflowerblue", "Grade0/1a" ="darkmagenta"),
+    ctDNA.Base = c("POSITIVE" = "red3", "NEGATIVE" ="blue"),
+    ctDNA.postNAC = c("POSITIVE" = "red3", "NEGATIVE" ="blue"),
+    ctDNA.MRD = c("POSITIVE" = "red3", "NEGATIVE" ="blue"),
+    EFS.Event = c("TRUE" = "red3", "FALSE" ="blue"),
+    OS.Event = c("TRUE" = "black", "FALSE" ="gray")    
+))
+ht <- Heatmap(matrix(nrow = 0, ncol = length(circ_data$Stage)),show_row_names = FALSE,cluster_rows = F,cluster_columns = FALSE, top_annotation = ha)
+pdf("heatmap.pdf",width = 7, height = 7)
+draw(ht, annotation_legend_side = "bottom")
+dev.off()
+```
+
+
+#Overview Plot
+```{r}
+setwd("~/Downloads") 
+clinstage<- read.csv("Keio Neo FLOT_OP.csv")
+clinstage_df<- as.data.frame(clinstage)
+
+#Display the swimmer plot with the label box
+oplot<-swimmer_plot(df=clinstage_df,
+                    id='PatientName',
+                    end='fu.diff.months',
+                    fill='gray',
+                    width=.01,
+                    base_size = 14)
+oplot <- oplot + theme(panel.border = element_blank())
+oplot <- oplot + scale_y_continuous(breaks = seq(-12, 48, by = 6))
+oplot <- oplot + labs(x ="Patients" , y="Months from Enrolment")
+oplot
+
+
+##plot events
+oplot_ev1 <- oplot + swimmer_points(df_points=clinstage_df,
+                                    id='PatientName',
+                                    time='date.diff.months',
+                                    name_shape ='Event_type',
+                                    name_col = 'Event',
+                                    size=3.5,fill='black',
+                                    #col='darkgreen'
+)
+oplot_ev1
+
+#Shape customization to Event_type
+
+oplot_ev1.1 <- oplot_ev1 + ggplot2::scale_shape_manual(name="Event_type",values=c(1,16,6,18,4),breaks=c('ctDNA_neg','ctDNA_pos', 'Imaging','Surgery', 'Death'))
+
+oplot_ev1.1
+
+#plot treatment
+
+oplot_ev2 <- oplot_ev1.1 + swimmer_lines(df_lines=clinstage_df,
+                                         id='PatientName',
+                                         start='Tx_start.months',
+                                         end='Tx_end.months',
+                                         name_col='Tx_type',
+                                         size=3.5,
+                                         name_alpha = 1.0)
+oplot_ev2 <- oplot_ev2 + guides(linetype = guide_legend(override.aes = list(size = 5, color = "black")))
+oplot_ev2  
+
+
+#colour customization
+oplot_ev2.2 <- oplot_ev2 + ggplot2::scale_color_manual(name="Event",values=c("black", "black", "orange", "green", "red", "blue"))
+oplot_ev2.2
+```
+
+
+#EFS by ctDNA post-NAT - all stages
+```{r}
+rm(list=ls())
+setwd("~/Downloads")
+circ_data <- read.csv("Keio Neo FLOT_Clinical Data.csv")
+circ_data <- circ_data[circ_data$ctDNA.postNAC!="",]
+circ_datadf <- as.data.frame(circ_data)
+
+survfit(Surv(time = circ_data$EFS.months, event = circ_data$EFS.Event)~ctDNA.postNAC, data = circ_data)
+surv_object <-Surv(time = circ_data$EFS.months, event = circ_data$EFS.Event)
+KM_curve <- survfit(surv_object ~ ctDNA.postNAC, data = circ_data,conf.int=0.95,conf.type="log-log") 
+ggsurvplot(KM_curve, data = circ_data, pval = FALSE, conf.int = FALSE, risk.table = TRUE, break.time.by=6, palette=c("blue","red"), title="EFS - ctDNA status post-NAT | All pts", ylab= "Event-Free Survival", xlab="Months from randomization", legend.labs=c("ctDNA Negative", "ctDNA Positive"), legend.title="")
+summary(KM_curve, times= c(24))
+circ_data$ctDNA.postNAC <- factor(circ_data$ctDNA.postNAC, levels=c("NEGATIVE","POSITIVE"))
+cox_fit <- coxph(surv_object ~ ctDNA.postNAC, data=circ_data) 
+ggforest(cox_fit,data = circ_data) 
+summary(cox_fit)
+cox_fit_summary <- summary(cox_fit)
+
+# Extract values for HR, 95% CI, and p-value
+HR <- cox_fit_summary$coefficients[2]
+lower_CI <- cox_fit_summary$conf.int[3]
+upper_CI <- cox_fit_summary$conf.int[4]
+p_value <- cox_fit_summary$coefficients[5]
+label_text <- paste0("HR = ", round(HR, 2), " (", round(lower_CI, 2), "-", round(upper_CI, 2), "); p = ", round(p_value, 3))
+print(label_text)
+```
+
+
+
+
+#EFS by ctDNA Clearance post-NAT
+```{r}
+rm(list=ls())
+setwd("~/Downloads")
+circ_data <- read.csv("Keio Neo FLOT_Clinical Data.csv")
+
+circ_data$ctDNA.C2D1.Clearance <- NA #first we create the variable for the ctDNA & NAC combination, and we assign values
+circ_data <- circ_data %>%
+  mutate(ctDNA.C2D1.Clearance = case_when(
+    ctDNA.Base == "POSITIVE" & ctDNA.postNAC == "NEGATIVE" ~ "TRUE",
+    ctDNA.Base == "POSITIVE" & ctDNA.postNAC == "POSITIVE" ~ "FALSE",
+  ))
+
+circ_data <- circ_data[!is.na(circ_data$ctDNA.C2D1.Clearance),]
+survfit(Surv(time = circ_data$EFS.months, event = circ_data$EFS.Event)~ctDNA.C2D1.Clearance, data = circ_data)
+surv_object <-Surv(time = circ_data$EFS.months, event = circ_data$EFS.Event)
+KM_curve <- survfit(surv_object ~ ctDNA.C2D1.Clearance, data = circ_data,conf.int=0.95,conf.type="log-log") 
+ggsurvplot(KM_curve, data = circ_data, pval = FALSE, conf.int = FALSE, risk.table = TRUE, break.time.by=12, palette=c("red","blue"), title="EFS - ctDNA clearance post-NAT", ylab= "Event-Free Survival", xlab="Months from randomization", legend.labs=c("No Clearance", "Clearance"), legend.title="")
+summary(KM_curve, times= c(24))
+circ_data$ctDNA.C2D1.Clearance <- factor(circ_data$ctDNA.C2D1.Clearance, levels=c("TRUE","FALSE"))
+cox_fit <- coxph(surv_object ~ ctDNA.C2D1.Clearance, data=circ_data) 
+ggforest(cox_fit,data = circ_data) 
+summary(cox_fit)
+cox_fit_summary <- summary(cox_fit)
+
+# Extract values for HR, 95% CI, and p-value
+HR <- cox_fit_summary$coefficients[2]
+lower_CI <- cox_fit_summary$conf.int[3]
+upper_CI <- cox_fit_summary$conf.int[4]
+p_value <- cox_fit_summary$coefficients[5]
+label_text <- paste0("HR = ", round(HR, 2), " (", round(lower_CI, 2), "-", round(upper_CI, 2), "); p = ", round(p_value, 3))
+print(label_text)
+```
+
+
+#Association of ctDNA status with Pathological N status
+```{r}
+rm(list=ls())
+setwd("~/Downloads")
+circ_data <- read.csv("Keio Neo FLOT_Clinical Data.csv")
+
+circ_data$ctDNA.postNAC <- factor(circ_data$ctDNA.postNAC, levels = c("NEGATIVE", "POSITIVE"), labels = c("Negative", "Positive"))
+circ_data$pN.stage <- factor(circ_data$pN.stage, levels = c("N0", "N1-N3"), labels = c("N0", "N1-N3"))
+contingency_table <- table(circ_data$pN.stage, circ_data$ctDNA.postNAC)
+chi_square_test <- chisq.test(contingency_table)
+print(chi_square_test)
+fisher_exact_test <- fisher.test(contingency_table)
+print(fisher_exact_test)
+print(contingency_table)
+table_df <- as.data.frame(contingency_table)
+table_df$Total <- ave(table_df$Freq, table_df$Var1, FUN = sum)
+table_df$Percentage <- table_df$Freq / table_df$Total
+table_df$MiddlePercentage <- table_df$Percentage / 2
+ggplot(table_df, aes(x = Var1, y = Percentage, fill = Var2)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(y = MiddlePercentage, label = Freq), position = "stack", color = "black", vjust = 1.5, size = 7) +
+  theme_minimal() +
+  labs(title = "ctDNA status", 
+       x = "Pathological N status", 
+       y = "Patients (%)", 
+       fill = "ctDNA post-NAC",
+       caption = paste("Fisher's exact test p-value: ", format.pval(fisher_exact_test$p.value))) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_fill_manual(values = c("Negative" = "blue", "Positive" = "red")) + # define custom colors
+  theme(axis.text.x = element_text(angle = 0, hjust = 1.5, size = 14), # increase x-axis text size
+        axis.text.y = element_text(size = 14, color = "black"), # increase y-axis text size
+        axis.title.x = element_text(size = 14, color = "black"), # increase x-axis label size
+        axis.title.y = element_text(size = 14, color = "black"), # increase y-axis label size
+        legend.text = element_text(size = 12, color = "black"))  # increase Recurrence label size
+```
+
+
+#Association of ctDNA clearance with Pathological N status
+```{r}
+rm(list=ls())
+setwd("~/Downloads")
+circ_data <- read.csv("Keio Neo FLOT_Clinical Data.csv")
+
+circ_data$ctDNA.clearance <- NA
+circ_data <- circ_data %>%
+  mutate(ctDNA.clearance = case_when(
+    ctDNA.Base == "POSITIVE" & ctDNA.postNAC == "NEGATIVE" ~ "TRUE",
+    ctDNA.Base == "POSITIVE" & ctDNA.postNAC == "POSITIVE" ~ "FALSE",
+  ))
+
+circ_data <- circ_data[!is.na(circ_data$ctDNA.clearance),]
+
+circ_data$ctDNA.clearance <- factor(circ_data$ctDNA.clearance, levels = c("TRUE", "FALSE"), labels = c("Clearance", "No Clearance"))
+circ_data$pN.stage <- factor(circ_data$pN.stage, levels = c("N0", "N1-N3"), labels = c("N0", "N1-N3"))
+contingency_table <- table(circ_data$pN.stage, circ_data$ctDNA.clearance)
+chi_square_test <- chisq.test(contingency_table)
+print(chi_square_test)
+fisher_exact_test <- fisher.test(contingency_table)
+print(fisher_exact_test)
+print(contingency_table)
+table_df <- as.data.frame(contingency_table)
+table_df$Total <- ave(table_df$Freq, table_df$Var1, FUN = sum)
+table_df$Percentage <- table_df$Freq / table_df$Total
+table_df$MiddlePercentage <- table_df$Percentage / 2
+ggplot(table_df, aes(x = Var1, y = Percentage, fill = Var2)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(y = MiddlePercentage, label = Freq), position = "stack", color = "black", vjust = 1.5, size = 7) +
+  theme_minimal() +
+  labs(title = "ctDNA clearance", 
+       x = "Pathological N Stage", 
+       y = "Patients (%)", 
+       fill = "ctDNA Clearance",
+       caption = paste("Fisher's exact test p-value: ", format.pval(fisher_exact_test$p.value))) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_fill_manual(values = c("Clearance" = "blue", "No Clearance" = "red")) + # define custom colors
+  theme(axis.text.x = element_text(angle = 0, hjust = 1.5, size = 14), # increase x-axis text size
+        axis.text.y = element_text(size = 14, color = "black"), # increase y-axis text size
+        axis.title.x = element_text(size = 14, color = "black"), # increase x-axis label size
+        axis.title.y = element_text(size = 14, color = "black"), # increase y-axis label size
+        legend.text = element_text(size = 12, color = "black"))  # increase Recurrence label size
+```
+
+
+#Association of ctDNA dynamics with Pathological N status
+```{r}
+rm(list=ls())
+setwd("~/Downloads")
+circ_data <- read.csv("Keio Neo FLOT_Clinical Data.csv")
+
+circ_data$ctDNA.Dynamics <- NA #first we create the variable for the ctDNA & NAC combination, and we assign values
+circ_data <- circ_data %>%
+  mutate(ctDNA.Dynamics = case_when(
+    ctDNA.Base == "POSITIVE" & ctDNA.postNAC == "NEGATIVE" & ctDNA.MRD == "NEGATIVE" ~ "ctDNA +/-/-",
+    ctDNA.Base == "POSITIVE" & ctDNA.postNAC == "POSITIVE" & ctDNA.MRD == "NEGATIVE" ~ "ctDNA +/+/-",
+    ctDNA.Base == "POSITIVE" & ctDNA.postNAC == "POSITIVE" & ctDNA.MRD == "POSITIVE" ~ "ctDNA +/+/+"
+  ))
+
+circ_data$ctDNA.Dynamics <- factor(circ_data$ctDNA.Dynamics, levels=c("ctDNA +/-/-", "ctDNA +/+/-", "ctDNA +/+/+"))
+circ_data$pN.stage <- factor(circ_data$pN.stage, levels = c("N0", "N1-N3"), labels = c("N0", "N1-N3"))
+contingency_table <- table(circ_data$ctDNA.Dynamics, circ_data$pN.stage)
+chi_square_test <- chisq.test(contingency_table)
+print(chi_square_test)
+fisher_exact_test <- fisher.test(contingency_table)
+print(fisher_exact_test)
+print(contingency_table)
+table_df <- as.data.frame(contingency_table)
+table_df$Total <- ave(table_df$Freq, table_df$Var1, FUN = sum)
+table_df$Percentage <- table_df$Freq / table_df$Total
+table_df$MiddlePercentage <- table_df$Percentage / 2
+ggplot(table_df, aes(x = Var1, y = Percentage, fill = Var2)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(y = MiddlePercentage, label = Freq), position = "stack", color = "black", vjust = 1.5, size = 7) +
+  theme_minimal() +
+  labs(title = "ctDNA Dynamics & Response", 
+       x = "ctDNA Dynamics", 
+       y = "Patients (%)", 
+       fill = "Pathological N Stage",
+       caption = paste("Fisher's exact test p-value: ", format.pval(fisher_exact_test$p.value))) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_fill_manual(values = c("N0" = "blue", "N1-N3" = "red")) + # define custom colors
+  theme(axis.text.x = element_text(angle = 0, hjust = 1.5, size = 14), # increase x-axis text size
+        axis.text.y = element_text(size = 14, color = "black"), # increase y-axis text size
+        axis.title.x = element_text(size = 14, color = "black"), # increase x-axis label size
+        axis.title.y = element_text(size = 14, color = "black"), # increase y-axis label size
+        legend.text = element_text(size = 12, color = "black"))  # increase Recurrence label size
+```
+
+
+#EFS by ctDNA at the MRD Window 
+```{r}
+rm(list=ls())
+setwd("~/Downloads")
+circ_data <- read.csv("Keio Neo FLOT_Clinical Data.csv")
+circ_data <- circ_data[circ_data$ctDNA.MRD!="",]
+
+survfit(Surv(time = circ_data$EFS.months, event = circ_data$EFS.Event)~ctDNA.MRD, data = circ_data)
+surv_object <-Surv(time = circ_data$EFS.months, event = circ_data$EFS.Event)
+KM_curve <- survfit(surv_object ~ ctDNA.MRD, data = circ_data,conf.int=0.95,conf.type="log-log") 
+ggsurvplot(KM_curve, data = circ_data, pval = FALSE, conf.int = FALSE, risk.table = TRUE, break.time.by=6, palette=c("blue","red"), title="EFS - ctDNA MRD window | All pts", ylab= "Event-Free Survival", xlab="Months from randomization", legend.labs=c("ctDNA Negative", "ctDNA Positive"), legend.title="")
+summary(KM_curve, times= c(0, 24))
+circ_data$ctDNA.MRD <- factor(circ_data$ctDNA.MRD, levels=c("NEGATIVE","POSITIVE"))
+cox_fit <- coxph(surv_object ~ ctDNA.MRD, data=circ_data) 
+ggforest(cox_fit,data = circ_data) 
+summary(cox_fit)
+cox_fit_summary <- summary(cox_fit)
+
+# Extract values for HR, 95% CI, and p-value
+HR <- cox_fit_summary$coefficients[2]
+lower_CI <- cox_fit_summary$conf.int[3]
+upper_CI <- cox_fit_summary$conf.int[4]
+p_value <- cox_fit_summary$coefficients[5]
+label_text <- paste0("HR = ", round(HR, 2), " (", round(lower_CI, 2), "-", round(upper_CI, 2), "); p = ", round(p_value, 3))
+print(label_text)
+```
+
+
+
+
+#OS by ctDNA at the MRD Window 
+```{r}
+rm(list=ls())
+setwd("~/Downloads")
+circ_data <- read.csv("Keio Neo FLOT_Clinical Data.csv")
+circ_data <- circ_data[circ_data$ctDNA.MRD!="",]
+
+survfit(Surv(time = circ_data$OS.months, event = circ_data$OS.Event)~ctDNA.MRD, data = circ_data)
+surv_object <-Surv(time = circ_data$OS.months, event = circ_data$OS.Event)
+KM_curve <- survfit(surv_object ~ ctDNA.MRD, data = circ_data,conf.int=0.95,conf.type="log-log") 
+ggsurvplot(KM_curve, data = circ_data, pval = FALSE, conf.int = FALSE, risk.table = TRUE, break.time.by=6, palette=c("blue","red"), title="OS - ctDNA MRD window | All pts", ylab= "Overall Survival", xlab="Months from randomization", legend.labs=c("ctDNA Negative", "ctDNA Positive"), legend.title="")
+summary(KM_curve, times= c(0, 24))
+circ_data$ctDNA.MRD <- factor(circ_data$ctDNA.MRD, levels=c("NEGATIVE","POSITIVE"))
+cox_fit <- coxph(surv_object ~ ctDNA.MRD, data=circ_data) 
+ggforest(cox_fit,data = circ_data) 
+summary(cox_fit)
+cox_fit_summary <- summary(cox_fit)
+
+# Extract values for HR, 95% CI, and p-value
+HR <- cox_fit_summary$coefficients[2]
+lower_CI <- cox_fit_summary$conf.int[3]
+upper_CI <- cox_fit_summary$conf.int[4]
+p_value <- cox_fit_summary$coefficients[5]
+label_text <- paste0("HR = ", round(HR, 2), " (", round(lower_CI, 2), "-", round(upper_CI, 2), "); p = ", round(p_value, 3))
+print(label_text)
+```
+
+
+
