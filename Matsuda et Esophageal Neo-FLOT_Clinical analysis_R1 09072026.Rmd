@@ -1,0 +1,678 @@
+---
+title: "Matsuda et Esophageal Neo-FLOT_Clinical analysis_R1 09072026"
+subtitle: "ctDNA clinical analysis — Revision 1"
+author: "Matsuda et al."
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_document:
+    theme: flatly
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 3
+    number_sections: true
+    code_folding: hide
+    df_print: paged
+    fig_caption: true
+    self_contained: true
+params:
+  data_path: "Keio Neo FLOT_Clinical Data.csv"
+  swim_path: "Keio Neo FLOT_OP.csv"
+  export_docx: false
+---
+
+```{css, echo=FALSE}
+body { font-size: 15px; }
+h1.title { font-size: 30px; color: #1a4f6e; }
+h1 { font-size: 24px; color: #1a4f6e; margin-top: 40px; }
+h2 { font-size: 20px; color: #2c7fb8; margin-top: 28px; }
+h3 { font-size: 17px; color: #41729f; }
+.main-container { max-width: 1180px; }
+pre code { font-size: 13px; }
+.tocify-subheader .tocify-item { font-size: 0.9em; }
+blockquote {
+  font-size: 14px; border-left: 4px solid #2c7fb8;
+  background: #f2f8fb; padding: 8px 14px; color: #333;
+}
+caption, .caption { font-size: 13px; color: #555; font-style: italic; }
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo       = TRUE,
+  warning    = FALSE,
+  message    = FALSE,
+  fig.align  = "center",
+  fig.width  = 8,
+  fig.height = 6,
+  out.width  = "85%",
+  dpi        = 150,
+  comment    = "#>"
+)
+options(width = 100)
+```
+
+```{r libraries}
+library(tidyverse)
+library(survival)
+library(survminer)
+library(scales)
+library(patchwork)
+library(pROC)
+library(gtsummary)
+library(flextable)
+library(ComplexHeatmap)
+library(swimplot)
+library(DT)
+library(knitr)
+```
+
+# Data and helper functions
+
+Loaded once here and reused throughout. Empty cells are read as `NA` rather
+than `""`, which matters for the pathology variables.
+
+```{r load-data}
+clin <- read.csv(params$data_path, na.strings = c("", "NA", " "),
+                 stringsAsFactors = FALSE)
+
+clin <- clin %>%
+  mutate(
+    across(ends_with(".MTM"), ~ as.numeric(as.character(.x))),
+    across(c(EFS.months, OS.months, Age), as.numeric),
+    across(c(EFS.Event, OS.Event), as.logical),
+    Stage         = factor(Stage, levels = c("I", "II", "III", "IV")),
+    StageGroup    = factor(StageGroup, levels = c("I-II", "III-IV")),
+    pN.stage      = factor(pN.stage, levels = c("N0", "N1-N3")),
+    Grade         = factor(Grade, levels = c("Grade0/1a", "Grade1b/2/3")),
+    pCR           = factor(as.logical(pCR), levels = c(FALSE, TRUE),
+                           labels = c("no pCR", "pCR")),
+    across(starts_with("ctDNA.") & !ends_with(c(".MTM", ".Date")),
+           ~ factor(.x, levels = c("NEGATIVE", "POSITIVE")))
+  )
+
+cat(sprintf("n = %d patients, %d variables\n", nrow(clin), ncol(clin)))
+```
+
+```{r helpers}
+# --- Detection rate by stage, for any ctDNA window -------------------------
+detection_rate <- function(df, window, stages = c("I", "II", "III", "IV")) {
+  d <- df %>%
+    filter(!is.na(.data[[window]]), Stage %in% stages) %>%
+    mutate(Stage = droplevels(factor(Stage, levels = stages)))
+
+  by_stage <- d %>%
+    group_by(Stage, .drop = FALSE) %>%
+    summarise(Total = n(),
+              Positive = sum(.data[[window]] == "POSITIVE"),
+              .groups = "drop")
+
+  bind_rows(by_stage,
+            tibble(Stage = "Overall", Total = nrow(d),
+                   Positive = sum(d[[window]] == "POSITIVE"))) %>%
+    mutate(Stage = as.character(Stage),
+           `Rate (%)` = sprintf("%.1f%%", 100 * Positive / Total))
+}
+
+# --- Consistent HR / CI / p string from a coxph fit -----------------------
+cox_label <- function(fit, row = 1) {
+  s <- summary(fit)
+  sprintf("HR = %.2f (95%% CI %.2f\u2013%.2f); p = %s",
+          s$conf.int[row, 1], s$conf.int[row, 3], s$conf.int[row, 4],
+          format.pval(s$coefficients[row, 5], digits = 3, eps = 0.001))
+}
+
+# --- Event counts / percentages by group ----------------------------------
+event_summary <- function(df, group_var, time_var, event_var) {
+  df %>%
+    filter(!is.na(.data[[group_var]]), !is.na(.data[[event_var]]),
+           !is.na(.data[[time_var]])) %>%
+    group_by(Group = .data[[group_var]]) %>%
+    summarise(n = n(),
+              Events = sum(.data[[event_var]]),
+              `Events (%)` = sprintf("%.1f%%", 100 * mean(.data[[event_var]])),
+              `Median follow-up` = sprintf("%.1f", median(.data[[time_var]])),
+              .groups = "drop")
+}
+
+km_theme <- theme_classic() +
+  theme(axis.title = element_text(colour = "black", size = 13),
+        axis.text  = element_text(colour = "black", size = 12))
+```
+
+# ctDNA detection rate {.tabset .tabset-fade}
+
+## Baseline
+
+```{r det-base}
+kable(detection_rate(clin, "ctDNA.Base"))
+```
+
+## Post-NAC
+
+```{r det-postnac}
+kable(detection_rate(clin, "ctDNA.postNAC"))
+```
+
+## MRD window
+
+```{r det-mrd}
+kable(detection_rate(clin, "ctDNA.MRD", stages = c("I", "II", "III")))
+```
+
+# Patient demographics
+
+```{r demographics}
+tab1 <- clin %>%
+  select(Age, Sex, ECOG, Location, Stage, Resection, pGrade,
+         Recurrence, OS.Event, OS.months) %>%
+  mutate(
+    Sex        = factor(Sex, levels = c("Male", "Female")),
+    ECOG       = factor(ECOG, levels = c("0", "1")),
+    Location   = factor(Location, levels = c("Lt", "Mt", "Ut")),
+    Resection  = factor(Resection, levels = c("R0", "R1")),
+    pGrade     = factor(pGrade, levels = c("Grade0", "Grade1", "Grade2", "Grade3")),
+    Recurrence = factor(Recurrence, levels = c("TRUE", "FALSE")),
+    OS.Event   = factor(OS.Event, levels = c("TRUE", "FALSE"))
+  ) %>%
+  tbl_summary(statistic = list(all_continuous()  ~ "{median} ({min} \u2013 {max})",
+                               all_categorical() ~ "{n} ({p}%)")) %>%
+  bold_labels()
+
+tab1
+```
+
+```{r demographics-export, eval=params$export_docx}
+save_as_docx(as_flex_table(tab1, strip_md_bold = TRUE),
+             path = "1. Keio ESCC_Demographics Table.docx")
+```
+
+# Cohort overview
+
+## Clinical and ctDNA heatmap
+
+```{r heatmap, fig.width=11, fig.height=5.5, out.width="100%"}
+hm <- clin %>% arrange(Stage)
+
+ha <- HeatmapAnnotation(
+  Stage         = hm$Stage,
+  Sex           = hm$Sex,
+  Location      = hm$Location,
+  Grade         = hm$Grade,
+  ctDNA.Base    = hm$ctDNA.Base,
+  ctDNA.postNAC = hm$ctDNA.postNAC,
+  ctDNA.MRD     = hm$ctDNA.MRD,
+  ctDNA.postPD  = hm$ctDNA.postPD,
+  EFS.Event     = as.character(hm$EFS.Event),
+  OS.Event      = as.character(hm$OS.Event),
+  col = list(
+    Stage         = c("I" = "seagreen1", "II" = "seagreen",
+                      "III" = "orange", "IV" = "purple"),
+    Sex           = c("Female" = "goldenrod", "Male" = "blue4"),
+    Location      = c("Lt" = "brown", "Mt" = "darkgreen", "Ut" = "orange4"),
+    Grade         = c("Grade1b/2/3" = "cornflowerblue",
+                      "Grade0/1a" = "darkmagenta"),
+    ctDNA.Base    = c("POSITIVE" = "red3", "NEGATIVE" = "blue"),
+    ctDNA.postNAC = c("POSITIVE" = "red3", "NEGATIVE" = "blue"),
+    ctDNA.MRD     = c("POSITIVE" = "red3", "NEGATIVE" = "blue"),
+    ctDNA.postPD  = c("POSITIVE" = "red3", "NEGATIVE" = "blue"),
+    EFS.Event     = c("TRUE" = "red3", "FALSE" = "blue"),
+    OS.Event      = c("TRUE" = "black", "FALSE" = "gray")
+  ),
+  na_col = "grey92"
+)
+
+ht <- Heatmap(matrix(nrow = 0, ncol = nrow(hm)),
+              show_row_names = FALSE, cluster_rows = FALSE,
+              cluster_columns = FALSE, top_annotation = ha)
+draw(ht, annotation_legend_side = "bottom")
+```
+
+## Swimmer plot
+
+```{r swimmer, fig.width=9, fig.height=9, out.width="95%", eval=file.exists(params$swim_path)}
+swim <- read.csv(params$swim_path, na.strings = c("", "NA"))
+
+swimmer_plot(df = swim, id = "PatientName", end = "fu.diff.months",
+             fill = "gray", width = .01, base_size = 14) +
+  theme(panel.border = element_blank()) +
+  scale_y_continuous(breaks = seq(-12, 48, by = 6)) +
+  labs(x = "Patients", y = "Months from enrolment") +
+  swimmer_points(df_points = swim, id = "PatientName",
+                 time = "date.diff.months", name_shape = "Event_type",
+                 name_col = "Event", size = 3.5, fill = "black") +
+  scale_shape_manual(name = "Event type", values = c(1, 16, 6, 18, 4),
+                     breaks = c("ctDNA_neg", "ctDNA_pos", "Imaging",
+                                "Surgery", "Death")) +
+  swimmer_lines(df_lines = swim, id = "PatientName", start = "Tx_start.months",
+                end = "Tx_end.months", name_col = "Tx_type",
+                size = 3.5, name_alpha = 1.0) +
+  scale_color_manual(name = "Event",
+                     values = c("black", "black", "orange",
+                                "green", "red", "blue")) +
+  guides(linetype = guide_legend(override.aes = list(size = 5,
+                                                     color = "black")))
+```
+
+```{r swimmer-missing, echo=FALSE, results="asis", eval=!file.exists(params$swim_path)}
+cat("> Swimmer plot skipped: `", params$swim_path, "` not found.\n", sep = "")
+```
+
+# Baseline ctDNA burden (MTM/mL)
+
+Restricted to patients ctDNA-positive at baseline.
+
+```{r base-pos}
+base_pos <- clin %>% filter(ctDNA.Base == "POSITIVE")
+cat(sprintf("n = %d ctDNA-positive at baseline; MTM/mL range %.2f \u2013 %.2f\n",
+            nrow(base_pos), min(base_pos$ctDNA.Base.MTM, na.rm = TRUE),
+            max(base_pos$ctDNA.Base.MTM, na.rm = TRUE)))
+```
+
+## Optimal cut-off by ROC {.tabset .tabset-fade}
+
+The threshold is derived once and every downstream label, split and plot
+title refers to it, so nothing is hard-coded.
+
+```{r roc-fn}
+derive_cutoff <- function(df, event_var, marker = "ctDNA.Base.MTM") {
+  d <- df[complete.cases(df[[event_var]], df[[marker]]), ]
+  r <- roc(d[[event_var]], d[[marker]], ci = TRUE, quiet = TRUE)
+  b <- coords(r, "best", best.method = "youden",
+              ret = c("threshold", "specificity", "sensitivity", "youden"),
+              transpose = FALSE)
+  list(roc = r, cutoff = as.numeric(b$threshold[1]), best = b)
+}
+```
+
+### EFS-derived
+
+```{r roc-efs, fig.width=6, fig.height=6, out.width="60%"}
+efs_roc <- derive_cutoff(base_pos, "EFS.Event")
+plot.roc(efs_roc$roc, print.auc = TRUE, print.thres = "best")
+cat(sprintf("\nAUC %.3f (95%% CI %.3f\u2013%.3f)\nCut-off %.3f | Sens %.3f | Spec %.3f | direction '%s'\n",
+            auc(efs_roc$roc), ci.auc(efs_roc$roc)[1], ci.auc(efs_roc$roc)[3],
+            efs_roc$cutoff, efs_roc$best$sensitivity[1],
+            efs_roc$best$specificity[1], efs_roc$roc$direction))
+```
+
+### OS-derived
+
+```{r roc-os, fig.width=6, fig.height=6, out.width="60%"}
+os_roc <- derive_cutoff(base_pos, "OS.Event")
+plot.roc(os_roc$roc, print.auc = TRUE, print.thres = "best")
+cat(sprintf("\nAUC %.3f (95%% CI %.3f\u2013%.3f)\nCut-off %.3f | Sens %.3f | Spec %.3f | direction '%s'\n",
+            auc(os_roc$roc), ci.auc(os_roc$roc)[1], ci.auc(os_roc$roc)[3],
+            os_roc$cutoff, os_roc$best$sensitivity[1],
+            os_roc$best$specificity[1], os_roc$roc$direction))
+```
+
+## Survival by baseline MTM/mL group {.tabset .tabset-fade}
+
+```{r mtm-group-fn}
+add_mtm_group <- function(df, cutoff) {
+  lo <- sprintf("MTM/mL < %.3f", cutoff)
+  hi <- sprintf("MTM/mL \u2265 %.3f", cutoff)
+  df %>% mutate(MTM.grp = factor(
+    if_else(ctDNA.Base.MTM < cutoff, lo, hi), levels = c(lo, hi)))
+}
+```
+
+### EFS
+
+```{r km-efs-mtm, fig.width=8, fig.height=7.5, out.width="85%"}
+d <- add_mtm_group(base_pos, efs_roc$cutoff)
+
+kable(event_summary(d, "MTM.grp", "EFS.months", "EFS.Event"))
+
+km <- survfit(Surv(EFS.months, EFS.Event) ~ MTM.grp, data = d,
+              conf.int = 0.95, conf.type = "log-log")
+
+ggsurvplot(km, data = d, pval = FALSE, conf.int = FALSE, risk.table = TRUE,
+           break.time.by = 12, palette = c("blue", "red"),
+           title = sprintf("EFS by baseline ctDNA burden (cut-off %.3f MTM/mL)",
+                           efs_roc$cutoff),
+           ylab = "Event-free survival", xlab = "Months from enrolment",
+           legend.labs = levels(d$MTM.grp), legend.title = "",
+           risk.table.height = 0.25, ggtheme = km_theme)
+```
+
+```{r cox-efs-mtm, fig.width=8, fig.height=2.6, out.width="80%"}
+fit <- coxph(Surv(EFS.months, EFS.Event) ~ MTM.grp, data = d)
+ggforest(fit, data = d, main = "EFS \u2014 baseline MTM/mL group")
+cat(cox_label(fit), "\n")
+summary(km, times = 24)
+```
+
+### OS
+
+```{r km-os-mtm, fig.width=8, fig.height=7.5, out.width="85%"}
+d2 <- add_mtm_group(base_pos, os_roc$cutoff)
+
+kable(event_summary(d2, "MTM.grp", "OS.months", "OS.Event"))
+
+km2 <- survfit(Surv(OS.months, OS.Event) ~ MTM.grp, data = d2,
+               conf.int = 0.95, conf.type = "log-log")
+
+ggsurvplot(km2, data = d2, pval = FALSE, conf.int = FALSE, risk.table = TRUE,
+           break.time.by = 12, palette = c("blue", "red"),
+           title = sprintf("OS by baseline ctDNA burden (cut-off %.3f MTM/mL)",
+                           os_roc$cutoff),
+           ylab = "Overall survival", xlab = "Months from enrolment",
+           legend.labs = levels(d2$MTM.grp), legend.title = "",
+           risk.table.height = 0.25, ggtheme = km_theme)
+```
+
+```{r cox-os-mtm, fig.width=8, fig.height=2.6, out.width="80%"}
+fit2 <- coxph(Surv(OS.months, OS.Event) ~ MTM.grp, data = d2)
+ggforest(fit2, data = d2, main = "OS \u2014 baseline MTM/mL group")
+cat(cox_label(fit2), "\n")
+summary(km2, times = 24)
+```
+
+# Baseline MTM/mL and clinicopathological features
+
+> Reviewer question: is quantitative pre-NAC ctDNA associated with stage,
+> nodal status, regression grade, pathological response, PFS and OS?
+
+Continuous MTM/mL compared between two independent groups with the
+**Wilcoxon rank-sum test**; p-values additionally shown after
+Benjamini–Hochberg adjustment across the four comparisons.
+
+```{r mtm-tests}
+vars <- c(StageGroup = "Clinical stage",  pN.stage = "pN stage",
+          Grade      = "Regression grade", pCR     = "Pathological response")
+
+compare_mtm <- function(df, gv, label, vv = "ctDNA.Base.MTM") {
+  d <- df[!is.na(df[[gv]]) & !is.na(df[[vv]]), ]
+  g <- droplevels(factor(d[[gv]])); x <- d[[vv]]
+  if (nlevels(g) < 2 || any(table(g) < 2))
+    return(tibble(Variable = label, Test = "not evaluable", p.value = NA_real_))
+
+  tt <- wilcox.test(x ~ g, conf.int = TRUE, exact = !any(duplicated(x)))
+  n1 <- sum(g == levels(g)[1]); n2 <- sum(g == levels(g)[2])
+
+  tibble(
+    Variable   = label,
+    Groups     = paste(levels(g), collapse = " vs "),
+    N          = paste(as.vector(table(g)), collapse = " / "),
+    `Median (IQR)` = paste(tapply(x, g, function(z)
+      sprintf("%.2f (%.2f\u2013%.2f)", median(z),
+              quantile(z, .25), quantile(z, .75))), collapse = "  |  "),
+    `HL shift (95% CI)` = sprintf("%.2f (%.2f to %.2f)", tt$estimate,
+                                  tt$conf.int[1], tt$conf.int[2]),
+    `rank-biserial` = round(2 * unname(tt$statistic) / (n1 * n2) - 1, 3),
+    Test = "Wilcoxon rank-sum", p.value = unname(tt$p.value)
+  )
+}
+
+results <- bind_rows(lapply(names(vars),
+                            function(v) compare_mtm(base_pos, v, vars[[v]])))
+results <- results %>%
+  mutate(p.adj  = p.adjust(p.value, "BH"),
+         p.value = format.pval(p.value, digits = 3, eps = 0.001),
+         p.adj   = format.pval(p.adj,  digits = 3, eps = 0.001))
+
+kable(results)
+```
+
+```{r mtm-plots, fig.width=11, fig.height=9, out.width="100%"}
+has_zero <- any(base_pos$ctDNA.Base.MTM == 0, na.rm = TRUE)
+brks <- c(0.001, 0.01, 0.1, 1, 10, 100, 1000)
+labs <- c("0.001", "0.01", "0.1", "1", "10", "100", "1000")
+
+mtm_scale <- if (has_zero) {
+  scale_y_continuous(trans = pseudo_log_trans(sigma = 0.001, base = 10),
+                     breaks = c(0, brks), labels = c("0", labs))
+} else {
+  scale_y_log10(breaks = brks, labels = labs)
+}
+
+plot_mtm <- function(df, gv, label, pval) {
+  d <- df[!is.na(df[[gv]]) & !is.na(df$ctDNA.Base.MTM), ]
+  d[[gv]] <- droplevels(factor(d[[gv]]))
+  ns <- table(d[[gv]])
+
+  ggplot(d, aes(x = .data[[gv]], y = ctDNA.Base.MTM)) +
+    geom_boxplot(outlier.shape = NA, width = .55, fill = NA,
+                 colour = "black", linewidth = .6) +
+    geom_jitter(width = .15, height = 0, size = 2, alpha = .65,
+                colour = "steelblue") +
+    mtm_scale +
+    scale_x_discrete(labels = function(l) sprintf("%s\n(n = %d)", l, ns[l])) +
+    labs(x = label, y = "Baseline ctDNA (MTM/mL)",
+         subtitle = paste0("Wilcoxon p = ", pval)) +
+    km_theme +
+    theme(axis.text.x = element_text(lineheight = 1.1),
+          plot.subtitle = element_text(size = 11))
+}
+
+wrap_plots(Map(function(v, l, p) plot_mtm(base_pos, v, l, p),
+               names(vars), vars, results$p.value), nrow = 2) +
+  plot_annotation(tag_levels = "A")
+```
+
+## Continuous MTM/mL and survival
+
+Modelled on the log~10~ scale, so the hazard ratio is **per 10-fold increase**
+in MTM/mL.
+
+```{r mtm-cox}
+base_pos$log10_MTM <- log10(base_pos$ctDNA.Base.MTM)
+
+cox_continuous <- function(time_var, event_var, endpoint) {
+  f <- coxph(as.formula(sprintf("Surv(%s, %s) ~ log10_MTM",
+                                time_var, event_var)), data = base_pos)
+  s <- summary(f)
+  tibble(Endpoint = endpoint, n = f$n, Events = f$nevent,
+         `HR per 10-fold` = sprintf("%.2f", s$conf.int[1, 1]),
+         `95% CI` = sprintf("%.2f\u2013%.2f", s$conf.int[1, 3], s$conf.int[1, 4]),
+         p = format.pval(s$coefficients[1, 5], digits = 3, eps = 0.001),
+         `PH test p` = format.pval(cox.zph(f)$table["GLOBAL", "p"], digits = 3))
+}
+
+kable(bind_rows(cox_continuous("EFS.months", "EFS.Event", "EFS"),
+                cox_continuous("OS.months",  "OS.Event",  "OS")))
+```
+
+# Post-NAC ctDNA {.tabset .tabset-fade}
+
+## EFS by post-NAC status
+
+```{r km-postnac, fig.width=8, fig.height=7.5, out.width="85%"}
+d3 <- clin %>% filter(!is.na(ctDNA.postNAC))
+
+kable(event_summary(d3, "ctDNA.postNAC", "EFS.months", "EFS.Event"))
+
+km3 <- survfit(Surv(EFS.months, EFS.Event) ~ ctDNA.postNAC, data = d3,
+               conf.int = .95, conf.type = "log-log")
+
+ggsurvplot(km3, data = d3, pval = FALSE, conf.int = FALSE, risk.table = TRUE,
+           break.time.by = 6, palette = c("blue", "red"),
+           title = "EFS \u2014 ctDNA status post-NAT (all patients)",
+           ylab = "Event-free survival", xlab = "Months from enrolment",
+           legend.labs = c("ctDNA negative", "ctDNA positive"),
+           legend.title = "", risk.table.height = 0.25, ggtheme = km_theme)
+```
+
+```{r cox-postnac, fig.width=8, fig.height=2.6, out.width="80%"}
+f3 <- coxph(Surv(EFS.months, EFS.Event) ~ ctDNA.postNAC, data = d3)
+ggforest(f3, data = d3, main = "EFS \u2014 ctDNA post-NAT")
+cat(cox_label(f3), "\n")
+summary(km3, times = 24)
+```
+
+## EFS by post-NAC clearance
+
+```{r km-clearance, fig.width=8, fig.height=7.5, out.width="85%"}
+d4 <- clin %>%
+  filter(ctDNA.Base == "POSITIVE", !is.na(ctDNA.postNAC)) %>%
+  mutate(Clearance = factor(if_else(ctDNA.postNAC == "NEGATIVE",
+                                    "Clearance", "No clearance"),
+                            levels = c("No clearance", "Clearance")))
+
+kable(event_summary(d4, "Clearance", "EFS.months", "EFS.Event"))
+
+km4 <- survfit(Surv(EFS.months, EFS.Event) ~ Clearance, data = d4,
+               conf.int = .95, conf.type = "log-log")
+
+ggsurvplot(km4, data = d4, pval = FALSE, conf.int = FALSE, risk.table = TRUE,
+           break.time.by = 12, palette = c("red", "blue"),
+           title = "EFS \u2014 ctDNA clearance post-NAT",
+           ylab = "Event-free survival", xlab = "Months from enrolment",
+           legend.labs = levels(d4$Clearance), legend.title = "",
+           risk.table.height = 0.25, ggtheme = km_theme)
+```
+
+```{r cox-clearance, fig.width=8, fig.height=2.6, out.width="80%"}
+f4 <- coxph(Surv(EFS.months, EFS.Event) ~ Clearance, data = d4)
+ggforest(f4, data = d4, main = "EFS \u2014 ctDNA clearance")
+cat(cox_label(f4), "\n")
+```
+
+# ctDNA and pathological nodal status {.tabset .tabset-fade}
+
+```{r xtab-fn}
+xtab_plot <- function(df, row_var, fill_var, xlab, fill_lab, title,
+                      cols = c("blue", "red")) {
+  d  <- df %>% filter(!is.na(.data[[row_var]]), !is.na(.data[[fill_var]]))
+  ct <- table(d[[row_var]], d[[fill_var]])
+  print(ct)
+  ft <- fisher.test(ct)
+  print(ft)
+
+  as.data.frame(ct) %>%
+    group_by(Var1) %>%
+    mutate(Percentage = Freq / sum(Freq)) %>%
+    ungroup() %>%
+    ggplot(aes(Var1, Percentage, fill = Var2)) +
+    geom_col() +
+    geom_text(aes(label = Freq), position = position_stack(vjust = .5),
+              size = 6) +
+    scale_y_continuous(labels = percent_format()) +
+    scale_fill_manual(values = setNames(cols, colnames(ct))) +
+    labs(title = title, x = xlab, y = "Patients (%)", fill = fill_lab,
+         caption = paste("Fisher's exact test p =",
+                         format.pval(ft$p.value, digits = 3))) +
+    theme_minimal(base_size = 14) +
+    theme(axis.text = element_text(colour = "black"))
+}
+```
+
+## By post-NAC ctDNA status
+
+```{r xtab-postnac, fig.width=6.5, fig.height=5.5, out.width="65%"}
+xtab_plot(clin, "pN.stage", "ctDNA.postNAC",
+          "Pathological N status", "ctDNA post-NAC", "ctDNA status")
+```
+
+## By ctDNA clearance
+
+```{r xtab-clearance, fig.width=6.5, fig.height=5.5, out.width="65%"}
+d5 <- clin %>%
+  filter(ctDNA.Base == "POSITIVE", !is.na(ctDNA.postNAC)) %>%
+  mutate(Clearance = factor(if_else(ctDNA.postNAC == "NEGATIVE",
+                                    "Clearance", "No clearance"),
+                            levels = c("Clearance", "No clearance")))
+
+xtab_plot(d5, "pN.stage", "Clearance",
+          "Pathological N stage", "ctDNA clearance", "ctDNA clearance")
+```
+
+## By ctDNA dynamics
+
+```{r xtab-dynamics, fig.width=7, fig.height=5.5, out.width="70%"}
+d6 <- clin %>%
+  mutate(Dynamics = case_when(
+    ctDNA.Base == "POSITIVE" & ctDNA.postNAC == "NEGATIVE" &
+      ctDNA.MRD == "NEGATIVE" ~ "ctDNA +/\u2212/\u2212",
+    ctDNA.Base == "POSITIVE" & ctDNA.postNAC == "POSITIVE" &
+      ctDNA.MRD == "NEGATIVE" ~ "ctDNA +/+/\u2212",
+    ctDNA.Base == "POSITIVE" & ctDNA.postNAC == "POSITIVE" &
+      ctDNA.MRD == "POSITIVE" ~ "ctDNA +/+/+"),
+    Dynamics = factor(Dynamics, levels = c("ctDNA +/\u2212/\u2212",
+                                           "ctDNA +/+/\u2212", "ctDNA +/+/+")))
+
+xtab_plot(d6, "Dynamics", "pN.stage",
+          "ctDNA dynamics", "Pathological N stage", "ctDNA dynamics & response")
+```
+
+# MRD window {.tabset .tabset-fade}
+
+## EFS
+
+```{r km-mrd-efs, fig.width=8, fig.height=7.5, out.width="85%"}
+d7 <- clin %>% filter(!is.na(ctDNA.MRD))
+
+kable(event_summary(d7, "ctDNA.MRD", "EFS.months", "EFS.Event"))
+
+km5 <- survfit(Surv(EFS.months, EFS.Event) ~ ctDNA.MRD, data = d7,
+               conf.int = .95, conf.type = "log-log")
+
+ggsurvplot(km5, data = d7, pval = FALSE, conf.int = FALSE, risk.table = TRUE,
+           break.time.by = 6, palette = c("blue", "red"),
+           title = "EFS \u2014 ctDNA at MRD window",
+           ylab = "Event-free survival", xlab = "Months from enrolment",
+           legend.labs = c("ctDNA negative", "ctDNA positive"),
+           legend.title = "", risk.table.height = 0.25, ggtheme = km_theme)
+```
+
+```{r cox-mrd-efs, fig.width=8, fig.height=2.6, out.width="80%"}
+f5 <- coxph(Surv(EFS.months, EFS.Event) ~ ctDNA.MRD, data = d7)
+ggforest(f5, data = d7, main = "EFS \u2014 ctDNA MRD")
+cat(cox_label(f5), "\n")
+summary(km5, times = c(0, 24))
+```
+
+## OS
+
+```{r km-mrd-os, fig.width=8, fig.height=7.5, out.width="85%"}
+kable(event_summary(d7, "ctDNA.MRD", "OS.months", "OS.Event"))
+
+km6 <- survfit(Surv(OS.months, OS.Event) ~ ctDNA.MRD, data = d7,
+               conf.int = .95, conf.type = "log-log")
+
+ggsurvplot(km6, data = d7, pval = FALSE, conf.int = FALSE, risk.table = TRUE,
+           break.time.by = 6, palette = c("blue", "red"),
+           title = "OS \u2014 ctDNA at MRD window",
+           ylab = "Overall survival", xlab = "Months from enrolment",
+           legend.labs = c("ctDNA negative", "ctDNA positive"),
+           legend.title = "", risk.table.height = 0.25, ggtheme = km_theme)
+```
+
+```{r cox-mrd-os, fig.width=8, fig.height=2.6, out.width="80%"}
+f6 <- coxph(Surv(OS.months, OS.Event) ~ ctDNA.MRD, data = d7)
+ggforest(f6, data = d7, main = "OS \u2014 ctDNA MRD")
+cat(cox_label(f6), "\n")
+summary(km6, times = c(0, 24))
+```
+
+# Multivariable model for EFS
+
+```{r multivariable, fig.width=9, fig.height=4.5, out.width="90%"}
+d8 <- clin %>%
+  filter(!is.na(ctDNA.MRD)) %>%
+  mutate(ctDNA.MRD = factor(ctDNA.MRD, levels = c("NEGATIVE", "POSITIVE"),
+                            labels = c("Negative", "Positive")),
+         Grade = factor(Grade, levels = c("Grade1b/2/3", "Grade0/1a")))
+
+mv <- coxph(Surv(EFS.months, EFS.Event) ~ ctDNA.MRD + Age + StageGroup + Grade,
+            data = d8)
+
+ggforest(mv, data = d8, main = "Multivariable model for EFS",
+         refLabel = "Reference")
+summary(mv)
+cox.zph(mv)
+```
+
+> With `r sum(d8$EFS.Event, na.rm = TRUE)` events across four covariates this
+> model is well below the conventional 10-events-per-variable rule; treat the
+> estimates as exploratory.
+
+# Session information
+
+```{r session, code_folding="hide"}
+sessionInfo()
+```
